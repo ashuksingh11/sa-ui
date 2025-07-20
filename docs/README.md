@@ -37,7 +37,8 @@ The application follows a clean MVC (Model-View-Controller) architecture pattern
 - [**Deployment Guide**](./guides/deployment.md) - Production deployment and configuration
 
 ### 📖 Reference
-- [**Code Examples**](./examples/README.md) - Practical implementation examples
+- [**Code Examples**](./examples/README.md) - Practical implementation examples with sample views
+- [**View Implementation Guide**](./examples/view-implementation-guide.md) - Complete guide for creating device-specific views
 - [**Best Practices**](./guides/best-practices.md) - Coding standards and patterns
 - [**Troubleshooting**](./guides/troubleshooting.md) - Common issues and solutions
 
@@ -143,6 +144,8 @@ graph TB
 - ✅ Mock services and controllers
 - ✅ Navigation system
 - ✅ Device detection framework
+- ✅ Sample view implementations (QR Login, Password Login, Account Info)
+- ✅ Complete controller-view communication examples
 
 ### Phase 2: Integration
 - [ ] Samsung Account SES API integration
