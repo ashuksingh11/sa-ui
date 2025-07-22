@@ -33,6 +33,8 @@ The application follows a clean MVC (Model-View-Controller) architecture pattern
 
 ### 🔧 Development Guides
 - [**UI Framework Integration**](./guides/ui-framework-integration.md) - Tizen NUI implementation
+- [**Tizen NUI Integration**](./guides/tizen-nui-integration.md) - Complete NUI application lifecycle integration
+- [**Dependency Injection Guide**](./guides/dependency-injection-guide.md) - How to add and use services with DI
 - [**Testing Strategy**](./guides/testing-strategy.md) - Unit, integration, and UI testing
 - [**Deployment Guide**](./guides/deployment.md) - Production deployment and configuration
 
