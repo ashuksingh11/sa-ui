@@ -194,62 +194,74 @@ private void OnViewChanged(object sender, BaseView newView)
 
 ## 🎯 Navigation Service NUI Integration
 
-### Enhanced NavigationService with NUI Support
+### TizenNavigationService with Stack-Based Navigation
 
-The NavigationService is enhanced to work directly with NUI:
+The TizenNavigationService provides stack-based navigation similar to Tizen Navigator:
 
 ```csharp
-public class NavigationService : INavigationService
+public class TizenNavigationService : ITizenNavigationService
 {
-    private Window _window;
-    private IServiceProvider _serviceProvider;
-    private BaseView _currentView;
+    private readonly Stack<BaseView> _navigationStack = new Stack<BaseView>();
+    private readonly Window _window;
+    private readonly AuthController _authController;
     
-    // Events for NUI application integration
-    public event EventHandler<BaseView> ViewChanged;
+    public BaseView CurrentView => _navigationStack.Count > 0 ? _navigationStack.Peek() : null;
+    public bool CanGoBack => _navigationStack.Count > 1;
+    public int StackDepth => _navigationStack.Count;
     
-    /// <summary>
-    /// Set the NUI window reference - called by the main application
-    /// </summary>
-    public void SetWindow(Window window)
+    public async Task PushAsync(string screenName, object parameters = null, bool animated = true)
     {
-        _window = window ?? throw new ArgumentNullException(nameof(window));
-        CreateGlobalOverlays();
-    }
-    
-    public async Task NavigateToAsync(string screenName, object parameters = null)
-    {
-        // Create the view for the target screen
-        var newView = await CreateViewForScreenAsync(screenName);
+        var view = CreateViewForScreen(screenName, parameters);
         
-        // Cleanup current view
-        await CleanupCurrentViewAsync();
-        
-        // Set the new view as current
-        _currentView = newView;
-        
-        // Load content for the new view
-        await _currentView.LoadContentAsync();
-        
-        // Notify the main application about view change
-        // This triggers the NUI window integration
-        ViewChanged?.Invoke(this, _currentView);
-    }
-    
-    private async Task CleanupCurrentViewAsync()
-    {
-        if (_currentView != null)
+        // Hide current view (keep in stack)
+        if (CurrentView != null)
         {
-            // Trigger view disappearance
-            await _currentView.OnDisappearingAsync();
-            
-            // Remove from NUI window
-            _window?.Remove(_currentView);
-            
-            // Dispose view resources
-            _currentView.Dispose();
-            _currentView = null;
+            await CurrentView.OnDisappearingAsync();
+            CurrentView.Hide();
         }
+        
+        // Add new view to stack and window
+        _navigationStack.Push(view);
+        _window.Add(view);
+        
+        // Show new view with animation
+        if (animated) await AnimateViewInAsync(view);
+        await view.OnAppearingAsync();
+    }
+    
+    public async Task<BaseView> PopAsync(bool animated = true)
+    {
+        if (!CanGoBack) return null;
+        
+        var currentView = CurrentView;
+        var previousView = _navigationStack.ElementAt(1);
+        
+        // Remove current view
+        await currentView.OnDisappearingAsync();
+        if (animated) await AnimateViewOutAsync(currentView);
+        
+        _window.Remove(currentView);
+        _navigationStack.Pop();
+        currentView.Dispose();
+        
+        // Show previous view
+        if (animated) await AnimateViewInAsync(previousView);
+        await previousView.OnAppearingAsync();
+        
+        return currentView;
+    }
+    
+    public async Task SetRootAsync(string screenName, object parameters = null, bool animated = true)
+    {
+        // Clear entire navigation stack and set new root
+        await ClearNavigationStackAsync(animated);
+        
+        var view = CreateViewForScreen(screenName, parameters);
+        _navigationStack.Push(view);
+        _window.Add(view);
+        
+        if (animated) await AnimateViewInAsync(view);
+        await view.OnAppearingAsync();
     }
 }
 ```
@@ -271,16 +283,24 @@ private bool OnWindowKeyEvent(object source, Window.KeyEventArgs e)
             {
                 case "XF86Back":
                 case "Escape":
-                    // Handle back button
-                    if (_currentView != null)
+                    // Handle back button using navigation service
+                    if (_navigationService?.CurrentView != null)
                     {
                         _ = Task.Run(async () =>
                         {
-                            var handled = await _currentView.OnBackPressedAsync();
+                            var handled = await _navigationService.CurrentView.OnBackPressedAsync();
                             if (!handled)
                             {
-                                // Default back behavior - minimize app
-                                Lower();
+                                // Try to pop navigation stack
+                                if (_navigationService.CanGoBack)
+                                {
+                                    await _navigationService.PopAsync();
+                                }
+                                else
+                                {
+                                    // No more views in stack - minimize app
+                                    Lower();
+                                }
                             }
                         });
                         return true;
@@ -435,45 +455,61 @@ private async Task HandleDeepLinkAsync(string targetScreen)
 
 ## 🎨 View Lifecycle Integration
 
-### BaseView NUI Integration
+### BaseView NUI Integration with Navigation
 
-The BaseView class properly integrates with NUI lifecycle:
+The BaseView class integrates with NUI lifecycle and navigation:
 
 ```csharp
 public abstract class BaseView : View
 {
     // BaseView inherits from Tizen.NUI.BaseComponents.View
-    // This provides automatic integration with NUI layout and rendering
+    // Provides automatic NUI integration and navigation methods
     
-    public BaseView(IController controller, IGlobalConfigService configService, DeviceInfo deviceInfo)
+    protected ITizenNavigationService NavigationService { get; private set; }
+    
+    public BaseView(
+        AuthController authController, 
+        AccountController accountController,
+        AppController appController,
+        IConfigService configService,
+        ITizenNavigationService navigationService = null)
     {
-        Controller = controller;
+        AuthController = authController;
+        AccountController = accountController;
+        AppController = appController;
         ConfigService = configService;
-        DeviceInfo = deviceInfo;
+        NavigationService = navigationService;
+        DeviceInfo = DeviceHelper.GetCurrentDeviceInfo();
         
-        // Initialize NUI view properties
         InitializeBaseLayout();
         ApplyDeviceSpecificSettings();
     }
     
-    private void InitializeBaseLayout()
+    // Navigation methods available in all views
+    protected async Task PushAsync(string screenName, object parameters = null, bool animated = true)
     {
-        // Set up main view properties for NUI
-        WidthSpecification = LayoutParamPolicies.MatchParent;
-        HeightSpecification = LayoutParamPolicies.MatchParent;
-        BackgroundColor = GetThemeBackgroundColor();
-        
-        // Create NUI layout
-        Layout = new LinearLayout
+        if (NavigationService != null)
         {
-            LinearOrientation = LinearLayout.Orientation.Vertical,
-            LinearAlignment = LinearLayout.Alignment.Top
-        };
-        
-        // Create child elements using NUI components
-        CreateTitleArea();
-        CreateContentContainer();
-        CreateButtonContainer();
+            await NavigationService.PushAsync(screenName, parameters, animated);
+        }
+    }
+    
+    protected async Task<bool> PopAsync(bool animated = true)
+    {
+        if (NavigationService != null && NavigationService.CanGoBack)
+        {
+            await NavigationService.PopAsync(animated);
+            return true;
+        }
+        return false;
+    }
+    
+    protected async Task SetRootAsync(string screenName, object parameters = null, bool animated = true)
+    {
+        if (NavigationService != null)
+        {
+            await NavigationService.SetRootAsync(screenName, parameters, animated);
+        }
     }
 }
 ```
@@ -482,45 +518,46 @@ public abstract class BaseView : View
 
 ### Complete Launch Sequence
 
-The complete application launch sequence integrating with Tizen:
+The complete application launch sequence with navigation integration:
 
 ```
 1. Tizen Launcher starts app
 2. NUIApplication.OnCreate() called
-3. Configure dependency injection
-4. Setup main window with device-specific settings
-5. Initialize services (config, device detection, navigation)
-6. Check for existing user accounts
-7. Navigate to appropriate initial screen (QRLogin or AccountInfo)
-8. Load and display first view
-9. Ready for user interaction
+3. Configure manual dependency injection (TizenServiceContainer)
+4. Initialize controllers (Auth, Account, App)
+5. Setup main window with device-specific settings
+6. Initialize TizenNavigationService with all dependencies
+7. Check for existing user accounts
+8. Set initial root view using navigation service
+9. Ready for stack-based navigation
 ```
 
 ### Implementation Example:
 
 ```csharp
-private async Task StartApplicationFlowAsync()
+private async Task InitializeApplicationAsync()
 {
     try
     {
-        // Check for existing user accounts
-        var accountService = _serviceProvider.GetRequiredService<ISamsungAccountService>();
-        var existingAccounts = await accountService.GetAllAccountListAsync();
-        
-        // Navigate to appropriate initial screen
-        if (existingAccounts.Count > 0)
+        // Initialize app controller
+        var initSuccess = await _appController.InitializeAppAsync();
+        if (!initSuccess)
         {
-            await _navigationService.NavigateToAsync("AccountInfo");
+            throw new InvalidOperationException("Failed to initialize application");
         }
-        else
-        {
-            await _navigationService.NavigateToAsync("QRLogin");
-        }
+
+        // Determine initial screen
+        var initialScreen = await _appController.GetInitialScreenAsync(_accountController);
+
+        // Set initial root view using navigation service
+        await _navigationService.SetRootAsync(initialScreen, animated: false);
     }
     catch (Exception ex)
     {
+        _appController?.HandleAppError(ex, "InitializeApplication");
+        
         // Fallback to QR login on any error
-        await _navigationService.NavigateToAsync("QRLogin");
+        await _navigationService.SetRootAsync("QRLogin", animated: false);
     }
 }
 ```
